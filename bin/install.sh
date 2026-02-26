@@ -24,6 +24,15 @@ ASSUME_YES=0
 WITH_FLATPAK=0
 WITH_ZEROTIER=0
 WITH_PRINTING=0
+WITH_KDE=0
+WITH_DEV=0
+WITH_GAMING=0
+WITH_QOL=0
+WITH_GPU=0
+WITH_AUDIO=0
+WITH_HW=0
+WITH_BASE=1
+MODULE_MODE=0
 SKIP_QOL=0
 SKIP_GAMING=0
 SKIP_DOTNET=0
@@ -52,6 +61,15 @@ Flags:
   --with-flatpak      Install flatpak + KDE integration
   --with-zerotier     Install zerotier-one and enable service
   --with-printing     Install cups/printing stack and enable services
+  --with-kde          Install KDE Plasma + SDDM + KDE apps
+  --with-dev          Install dev toolchain packages
+  --with-gaming       Install gaming stack
+  --with-qol          Install QoL apps (browsers/media/chat)
+  --with-gpu          Install Intel+NVIDIA GPU stack
+  --with-audio        Install PipeWire audio stack
+  --with-hw           Install hardware/filesystem support
+  --base-only         Only install base system packages (no desktop)
+  --no-base           Skip base package set
   --skip-qol          Skip browsers/media/chat/QoL packages
   --skip-gaming       Skip gaming packages
   --skip-dotnet       Skip dotnet-sdk
@@ -94,6 +112,15 @@ parse_args() {
       --with-flatpak) WITH_FLATPAK=1 ;;
       --with-zerotier) WITH_ZEROTIER=1 ;;
       --with-printing) WITH_PRINTING=1 ;;
+      --with-kde) WITH_KDE=1; MODULE_MODE=1 ;;
+      --with-dev) WITH_DEV=1; MODULE_MODE=1 ;;
+      --with-gaming) WITH_GAMING=1; MODULE_MODE=1 ;;
+      --with-qol) WITH_QOL=1; MODULE_MODE=1 ;;
+      --with-gpu) WITH_GPU=1; MODULE_MODE=1 ;;
+      --with-audio) WITH_AUDIO=1; MODULE_MODE=1 ;;
+      --with-hw) WITH_HW=1; MODULE_MODE=1 ;;
+      --base-only) MODULE_MODE=1; WITH_BASE=1; WITH_KDE=0; WITH_DEV=0; WITH_GAMING=0; WITH_QOL=0; WITH_GPU=0; WITH_AUDIO=0; WITH_HW=0 ;;
+      --no-base) WITH_BASE=0; MODULE_MODE=1 ;;
       --skip-qol) SKIP_QOL=1 ;;
       --skip-gaming) SKIP_GAMING=1 ;;
       --skip-dotnet) SKIP_DOTNET=1 ;;
@@ -327,12 +354,43 @@ install_group() {
 }
 
 print_plan() {
+  local plan_base plan_kde plan_dev plan_gaming plan_qol plan_gpu plan_audio plan_hw
+  if [[ "$MODULE_MODE" -eq 1 ]]; then
+    plan_base="$WITH_BASE"
+    plan_kde="$WITH_KDE"
+    plan_dev="$WITH_DEV"
+    plan_gaming="$WITH_GAMING"
+    plan_qol="$WITH_QOL"
+    plan_gpu="$WITH_GPU"
+    plan_audio="$WITH_AUDIO"
+    plan_hw="$WITH_HW"
+  else
+    plan_base=1
+    plan_kde=1
+    plan_dev=1
+    plan_gaming=$([[ "$SKIP_GAMING" -eq 1 ]] && echo 0 || echo 1)
+    plan_qol=$([[ "$SKIP_QOL" -eq 1 ]] && echo 0 || echo 1)
+    plan_gpu=1
+    plan_audio=1
+    plan_hw=1
+  fi
+
   cat <<PLAN
 
 ============================================================
 ARCH BASELINE PLAN (Intel iGPU + NVIDIA RTX 3070 Ti, no Docker)
 ============================================================
 Dry run: $DRY_RUN
+Mode: $([[ "$MODULE_MODE" -eq 1 ]] && echo "modular" || echo "default")
+Modules:
+  base:   $plan_base
+  kde:    $plan_kde
+  dev:    $plan_dev
+  gaming: $plan_gaming
+  qol:    $plan_qol
+  gpu:    $plan_gpu
+  audio:  $plan_audio
+  hw:     $plan_hw
 Flatpak: $WITH_FLATPAK
 ZeroTier: $WITH_ZEROTIER
 Printing: $WITH_PRINTING
@@ -345,6 +403,15 @@ Log file: $LOG_FILE
 It will:
   - enable multilib
   - run full system update (pacman -Syu)
+PLAN
+
+  if [[ "$MODULE_MODE" -eq 1 ]]; then
+    cat <<PLAN
+  - install selected modules only (see module list above)
+  - enable NetworkManager, SDDM, bluetooth, fstrim.timer (if present)
+PLAN
+  else
+    cat <<PLAN
   - install KDE Plasma + SDDM + Wayland helpers
   - install PipeWire audio stack
   - install dev toolchain + .NET (unless skipped)
@@ -352,6 +419,7 @@ It will:
   - install gaming stack (unless skipped)
   - enable NetworkManager, SDDM, bluetooth, fstrim.timer
 PLAN
+  fi
 }
 
 confirm_or_exit() {
@@ -506,36 +574,100 @@ install_all_packages() {
   local -a FLATPAK_PKGS=(flatpak flatpak-kcm)
   local -a ZEROTIER_PKGS=(zerotier-one)
 
-  install_group "Core tools" "${CORE_PKGS[@]}"
-  install_group "Build toolchain (base-devel-like)" "${BUILD_PKGS[@]}"
-  install_group "Networking tools" "${NETWORK_PKGS[@]}"
-  install_group "KDE Plasma + Wayland" "${KDE_WAYLAND_PKGS[@]}"
-  install_group "KDE Apps" "${KDE_APPS_PKGS[@]}"
-  install_group "Audio (PipeWire)" "${AUDIO_PKGS[@]}"
-  install_group "Hardware support / filesystems" "${HW_SUPPORT_PKGS[@]}"
-  install_group "Dev core (C/C++/Python/Node/etc.)" "${DEV_CORE_PKGS[@]}"
+  local install_base=0
+  local install_kde=0
+  local install_dev=0
+  local install_gpu=0
+  local install_audio=0
+  local install_hw=0
+  local install_gaming=0
+  local install_qol=0
 
-  if [[ "$SKIP_DOTNET" -eq 0 ]]; then
-    install_group ".NET SDK" "${DOTNET_PKGS[@]}"
+  if [[ "$MODULE_MODE" -eq 1 ]]; then
+    install_base="$WITH_BASE"
+    install_kde="$WITH_KDE"
+    install_dev="$WITH_DEV"
+    install_gpu="$WITH_GPU"
+    install_audio="$WITH_AUDIO"
+    install_hw="$WITH_HW"
+    install_gaming="$WITH_GAMING"
+    install_qol="$WITH_QOL"
   else
-    msg "Skipping .NET SDK"
+    install_base=1
+    install_kde=1
+    install_dev=1
+    install_gpu=1
+    install_audio=1
+    install_hw=1
+    install_gaming=1
+    install_qol=1
   fi
 
-  if [[ "$SKIP_CODE" -eq 0 ]]; then
-    install_group "Editor (VS Code OSS)" "${EDITOR_PKGS[@]}"
-  else
-    msg "Skipping VS Code OSS"
+  if [[ "$SKIP_GAMING" -eq 1 ]]; then
+    install_gaming=0
+  fi
+  if [[ "$SKIP_QOL" -eq 1 ]]; then
+    install_qol=0
   fi
 
-  install_group "GPU stack (Intel + NVIDIA RTX 3070 Ti)" "${GPU_INTEL_NVIDIA_PKGS[@]}"
+  if [[ "$install_base" -eq 1 ]]; then
+    install_group "Core tools" "${CORE_PKGS[@]}"
+    install_group "Build toolchain (base-devel-like)" "${BUILD_PKGS[@]}"
+    install_group "Networking tools" "${NETWORK_PKGS[@]}"
+  else
+    msg "Skipping base package set"
+  fi
 
-  if [[ "$SKIP_GAMING" -eq 0 ]]; then
+  if [[ "$install_kde" -eq 1 ]]; then
+    install_group "KDE Plasma + Wayland" "${KDE_WAYLAND_PKGS[@]}"
+    install_group "KDE Apps" "${KDE_APPS_PKGS[@]}"
+  else
+    msg "Skipping KDE Plasma + apps"
+  fi
+
+  if [[ "$install_audio" -eq 1 ]]; then
+    install_group "Audio (PipeWire)" "${AUDIO_PKGS[@]}"
+  else
+    msg "Skipping audio stack"
+  fi
+
+  if [[ "$install_hw" -eq 1 ]]; then
+    install_group "Hardware support / filesystems" "${HW_SUPPORT_PKGS[@]}"
+  else
+    msg "Skipping hardware/filesystem support"
+  fi
+
+  if [[ "$install_dev" -eq 1 ]]; then
+    install_group "Dev core (C/C++/Python/Node/etc.)" "${DEV_CORE_PKGS[@]}"
+
+    if [[ "$SKIP_DOTNET" -eq 0 ]]; then
+      install_group ".NET SDK" "${DOTNET_PKGS[@]}"
+    else
+      msg "Skipping .NET SDK"
+    fi
+
+    if [[ "$SKIP_CODE" -eq 0 ]]; then
+      install_group "Editor (VS Code OSS)" "${EDITOR_PKGS[@]}"
+    else
+      msg "Skipping VS Code OSS"
+    fi
+  else
+    msg "Skipping dev toolchain"
+  fi
+
+  if [[ "$install_gpu" -eq 1 ]]; then
+    install_group "GPU stack (Intel + NVIDIA RTX 3070 Ti)" "${GPU_INTEL_NVIDIA_PKGS[@]}"
+  else
+    msg "Skipping GPU stack"
+  fi
+
+  if [[ "$install_gaming" -eq 1 ]]; then
     install_group "Gaming stack" "${GAMING_PKGS[@]}"
   else
     msg "Skipping gaming stack"
   fi
 
-  if [[ "$SKIP_QOL" -eq 0 ]]; then
+  if [[ "$install_qol" -eq 1 ]]; then
     install_group "QoL apps" "${QOL_PKGS[@]}"
   else
     msg "Skipping QoL apps"

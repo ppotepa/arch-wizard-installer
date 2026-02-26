@@ -38,6 +38,7 @@ Two-stage Arch Linux setup for a KDE desktop:
 - All VM data is stored in `vm/`.
 - Script auto-installs dependencies, auto-downloads latest Arch ISO (if missing), and starts QEMU.
 - Project directory is shared to guest as 9p `toolset` and should be mounted in guest at `/mnt/toolset`.
+- Downloaded ISO is patched to include helper script on boot media: `/run/archiso/bootmnt/root/mount-toolset.sh`.
 
 Run GUI VM:
 
@@ -53,4 +54,4 @@ Clean everything in `vm/`:
 
 Inside guest mount project:
 
-`mkdir -p /mnt/toolset && mount -t 9p -o trans=virtio,version=9p2000.L toolset /mnt/toolset`
+`bash /run/archiso/bootmnt/root/mount-toolset.sh`

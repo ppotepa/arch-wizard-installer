@@ -19,8 +19,11 @@ VM_DIR="$ROOT_DIR/vm"
 BASE_IMAGE="$VM_DIR/arch-base.qcow2"
 OVERLAY_IMAGE="$VM_DIR/arch-test.qcow2"
 ISO_PATH="$VM_DIR/archlinux-x86_64.iso"
+ISO_PATCHED_PATH="$VM_DIR/archlinux-x86_64-toolset.iso"
+ISO_BOOT_PATH="$ISO_PATH"
 SUMS_PATH="$VM_DIR/sha256sums.txt"
 NOVNC_PID_FILE="$VM_DIR/novnc.pid"
+GUEST_HELPER_PATH="$VM_DIR/mount-toolset.sh"
 
 DISK_SIZE="16G"
 RAM_MB="4096"
@@ -121,6 +124,7 @@ ensure_dependencies() {
   local -a deps=()
   have qemu-system-x86_64 || deps+=(qemu-desktop)
   have qemu-img || deps+=(qemu-desktop)
+  have xorriso || deps+=(libisoburn)
   have curl || have wget || deps+=(curl)
   mapfile -t deps < <(printf "%s\n" "${deps[@]}" | awk 'NF && !seen[$0]++')
   if [[ "${#deps[@]}" -gt 0 ]]; then
@@ -187,6 +191,39 @@ ensure_arch_iso() {
   msg "ISO ready: $ISO_PATH"
 }
 
+write_guest_helper_script() {
+  cat > "$GUEST_HELPER_PATH" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+mkdir -p /mnt/toolset
+modprobe 9pnet_virtio 9p || true
+mount -t 9p -o trans=virtio,version=9p2000.L toolset /mnt/toolset
+echo "Mounted: /mnt/toolset"
+EOF
+  chmod +x "$GUEST_HELPER_PATH"
+}
+
+ensure_patched_iso() {
+  write_guest_helper_script
+
+  if [[ -f "$ISO_PATCHED_PATH" && "$ISO_PATCHED_PATH" -nt "$ISO_PATH" && "$ISO_PATCHED_PATH" -nt "$GUEST_HELPER_PATH" ]]; then
+    ISO_BOOT_PATH="$ISO_PATCHED_PATH"
+    return 0
+  fi
+
+  msg "Creating patched ISO with helper script at ISO path /root/mount-toolset.sh ..."
+  rm -f "$ISO_PATCHED_PATH"
+  xorriso \
+    -indev "$ISO_PATH" \
+    -outdev "$ISO_PATCHED_PATH" \
+    -boot_image any replay \
+    -map "$GUEST_HELPER_PATH" /root/mount-toolset.sh \
+    -commit \
+    -end >/dev/null
+
+  ISO_BOOT_PATH="$ISO_PATCHED_PATH"
+}
+
 stop_novnc() {
   [[ -f "$NOVNC_PID_FILE" ]] || return 0
   local pid
@@ -232,6 +269,7 @@ main() {
 
   ensure_dependencies
   ensure_arch_iso
+  ensure_patched_iso
 
   if [[ ! -f "$BASE_IMAGE" ]]; then
     msg "Creating base image: $BASE_IMAGE ($DISK_SIZE)"
@@ -252,7 +290,7 @@ main() {
     -smp "$CPU_COUNT"
     -m "$RAM_MB"
     -drive "file=$OVERLAY_IMAGE,if=virtio,format=qcow2"
-    -cdrom "$ISO_PATH"
+    -cdrom "$ISO_BOOT_PATH"
     -boot d
     -virtfs "local,path=$ROOT_DIR,mount_tag=toolset,security_model=none,id=toolset"
     -netdev "user,id=net0,hostfwd=tcp::2222-:22"
@@ -274,7 +312,7 @@ main() {
         -smp "$CPU_COUNT"
         -m "$RAM_MB"
         -drive "file=$OVERLAY_IMAGE,if=virtio,format=qcow2"
-        -cdrom "$ISO_PATH"
+        -cdrom "$ISO_BOOT_PATH"
         -boot d
         -virtfs "local,path=$ROOT_DIR,mount_tag=toolset,security_model=none,id=toolset"
         -netdev "user,id=net0,hostfwd=tcp::2222-:22"
@@ -288,8 +326,11 @@ main() {
 
   msg "VM files in: $VM_DIR"
   msg "SSH forward: localhost:2222 -> guest:22"
+  msg "Boot ISO: $ISO_BOOT_PATH"
   msg "Host project is shared to guest as 9p tag: toolset"
   msg "In guest run:"
+  msg "  bash /run/archiso/bootmnt/root/mount-toolset.sh"
+  msg "or manually:"
   msg "  mkdir -p /mnt/toolset"
   msg "  mount -t 9p -o trans=virtio,version=9p2000.L toolset /mnt/toolset"
   msg "Starting QEMU..."
