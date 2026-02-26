@@ -1,0 +1,14 @@
+# VM test artifacts
+vm/*
+!vm/.gitkeep
+
+# Generated local outputs
+*.log
+*.tmp
+*.swp
+*.swo
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
